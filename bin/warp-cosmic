@@ -1,0 +1,126 @@
+#!/usr/bin/env bash
+#
+# warp-cosmic - CLI and Tray Launcher for Cloudflare WARP on Pop!_OS COSMIC
+#
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+REPO_DIR="$(dirname "$SCRIPT_DIR")"
+TRAY_SCRIPT="$REPO_DIR/cosmic-tray/main.py"
+
+show_help() {
+    cat <<EOF
+Usage: warp-cosmic [COMMAND|OPTION]
+
+Cloudflare WARP COSMIC Panel Controller
+
+Commands:
+  tray             Launch the COSMIC Panel system tray applet (default)
+  status           Print current connection status and virtual IPs
+  toggle           Toggle WARP connection on/off
+  connect          Connect to Cloudflare WARP
+  disconnect       Disconnect from Cloudflare WARP
+  mode <mode>      Switch mode (warp, doh, warp+doh, proxy)
+  help             Show this help message
+
+Options:
+  -d, --daemon     Run tray applet as a background daemon
+  -h, --help       Show this help message
+
+Examples:
+  warp-cosmic              # Start tray applet
+  warp-cosmic --daemon     # Start tray applet in background
+  warp-cosmic status       # Check current WARP status
+  warp-cosmic toggle       # Toggle connection
+  warp-cosmic mode doh     # Switch to DNS-only mode
+EOF
+}
+
+cmd="${1:-tray}"
+
+case "$cmd" in
+    tray)
+        if [ "$2" = "-d" ] || [ "$2" = "--daemon" ]; then
+            nohup python3 "$TRAY_SCRIPT" >/dev/null 2>&1 &
+            echo "Cloudflare WARP COSMIC Tray launched in background (PID: $!)."
+        else
+            exec python3 "$TRAY_SCRIPT" "$@"
+        fi
+        ;;
+    status)
+        python3 -c "
+import sys
+sys.path.insert(0, '$REPO_DIR/cosmic-tray')
+from warp_client import WarpClient
+c = WarpClient()
+info = c.get_status_info()
+print('== Cloudflare WARP Status ==')
+print(f'Status:   {info[\"status\"]}')
+print(f'Mode:     {info[\"mode\"].upper()}')
+if info[\"ipv4\"]:
+    print(f'IPv4:     {info[\"ipv4\"]}')
+if info[\"ipv6\"]:
+    print(f'IPv6:     {info[\"ipv6\"]}')
+print(f'Daemon:   {\"Active\" if c.is_daemon_running() else \"Inactive\"}')
+print(f'Account:  {c.get_account_type()}')
+"
+        ;;
+    toggle)
+        python3 -c "
+import sys
+sys.path.insert(0, '$REPO_DIR/cosmic-tray')
+from warp_client import WarpClient
+c = WarpClient()
+ok, msg = c.toggle()
+print(msg)
+"
+        ;;
+    connect)
+        python3 -c "
+import sys
+sys.path.insert(0, '$REPO_DIR/cosmic-tray')
+from warp_client import WarpClient
+c = WarpClient()
+ok, msg = c.connect()
+print(msg)
+"
+        ;;
+    disconnect)
+        python3 -c "
+import sys
+sys.path.insert(0, '$REPO_DIR/cosmic-tray')
+from warp_client import WarpClient
+c = WarpClient()
+ok, msg = c.disconnect()
+print(msg)
+"
+        ;;
+    mode)
+        target_mode="$2"
+        if [ -z "$target_mode" ]; then
+            echo "Error: missing mode argument. Valid: warp, doh, warp+doh, proxy"
+            exit 1
+        fi
+        python3 -c "
+import sys
+sys.path.insert(0, '$REPO_DIR/cosmic-tray')
+from warp_client import WarpClient
+c = WarpClient()
+ok, msg = c.set_mode('$target_mode')
+print(msg if msg else f'Switched mode to $target_mode')
+"
+        ;;
+    -h|--help|help)
+        show_help
+        ;;
+    -d|--daemon)
+        nohup python3 "$TRAY_SCRIPT" >/dev/null 2>&1 &
+        echo "Cloudflare WARP COSMIC Tray launched in background (PID: $!)."
+        ;;
+    *)
+        echo "Unknown command: $cmd"
+        show_help
+        exit 1
+        ;;
+esac

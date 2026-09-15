@@ -1,7 +1,7 @@
 {
   "uuid": "warp-cosmic-panel@dasfletchi",
   "name": "Cloudflare WARP COSMIC Panel",
-  "description": "Top-bar controls for cloudflare warp-cli on Pop!_OS",
-  "shell-version": ["42", "43", "44", "45", "46"],
-  "version": 1
+  "description": "Top-bar controls for Cloudflare warp-cli on Pop!_OS and GNOME Shell",
+  "shell-version": ["45", "46", "47"],
+  "version": 2
 }

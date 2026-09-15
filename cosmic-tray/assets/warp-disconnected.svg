@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <defs>
+    <linearGradient id="discGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#9CA3AF"/>
+      <stop offset="100%" stop-color="#6B7280"/>
+    </linearGradient>
+  </defs>
+  <!-- Main Cloud in Muted Gray -->
+  <path d="M47.2 24.1C45.8 17.2 39.8 12 32.5 12c-6.2 0-11.5 3.8-13.7 9.3-1-.3-2.1-.5-3.3-.5-5.8 0-10.5 4.7-10.5 10.5 0 5.6 4.3 10.1 9.8 10.5h32.4C53.7 44.3 58 39.8 58 34.2c0-5.3-3.9-9.6-9-10.1h-1.8z" fill="url(#discGrad)"/>
+  <!-- Outline / Slash indicating disconnected -->
+  <path d="M22 33h20c1.1 0 2 .9 2 2s-.9 2-2 2H22c-1.1 0-2-.9-2-2s.9-2 2-2z" fill="#E5E7EB" opacity="0.6"/>
+  <!-- Disconnected small indicator circle -->
+  <circle cx="50" cy="18" r="5" fill="#6B7280" stroke="#E5E7EB" stroke-width="1.5"/>
+</svg>

@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Cloudflare WARP COSMIC Panel
+Comment=System tray applet for Cloudflare WARP on Pop!_OS COSMIC
+Exec=warp-cosmic tray
+Icon=warp-connected
+Terminal=false
+Categories=Network;Utility;
+StartupNotify=false
+X-GNOME-Autostart-enabled=true
+X-CosmicTray=true

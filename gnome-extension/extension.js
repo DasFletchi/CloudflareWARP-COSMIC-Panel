@@ -1,49 +1,57 @@
-const { GObject, GLib, St, Clutter } = imports.gi;
-const Main = imports.ui.main;
-const PanelMenu = imports.ui.panelMenu;
-const PopupMenu = imports.ui.popupMenu;
-const ByteArray = imports.byteArray;
-const Util = imports.misc.util;
+import GObject from 'gi://GObject';
+import GLib from 'gi://GLib';
+import Gio from 'gi://Gio';
+import St from 'gi://St';
+import Clutter from 'gi://Clutter';
+
+import * as Main from 'resource:///org/gnome/shell/ui/main.js';
+import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
+import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
+import { Extension } from 'resource:///org/gnome/shell/extensions/extension.js';
 
 const INSTALL_COMMAND = 'curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | sudo gpg --yes --dearmor -o /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg && echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/cloudflare-client.list >/dev/null && sudo apt-get update && sudo apt-get install -y cloudflare-warp';
-const ADVANCED_COMMANDS = [
-    'status',
-    'settings',
-    'stats',
-    'mode',
-    'dns',
-    'proxy',
-    'target',
-    'trusted',
-    'tunnel',
-    'vnet',
-    'registration',
-    'environment',
-    'override',
-    'mdm',
-    'connector',
-    'certs',
-    'debug',
-    'help',
-    'generate-completions'
-];
 
-function runShell(command) {
-    try {
-        let [ok, stdout, stderr, exitStatus] = GLib.spawn_command_line_sync(`bash -lc ${GLib.shell_quote(command)}`);
-        let output = ByteArray.toString(stdout || stderr || new Uint8Array());
-        return {
-            ok: ok && exitStatus === 0,
-            output: output.trim(),
-            exitStatus,
-        };
-    } catch (error) {
-        return {
-            ok: false,
-            output: `${error}`,
-            exitStatus: 1,
-        };
+/**
+ * Executes a command asynchronously without blocking the GNOME Shell thread.
+ */
+function runCommandAsync(argv) {
+    return new Promise((resolve) => {
+        try {
+            let proc = new Gio.Subprocess({
+                argv: argv,
+                flags: Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE,
+            });
+            proc.init(null);
+            proc.communicate_utf8_async(null, null, (proc, res) => {
+                try {
+                    let [, stdout, stderr] = proc.communicate_utf8_finish(res);
+                    let success = proc.get_successful();
+                    resolve({
+                        ok: success,
+                        output: (stdout || stderr || '').trim(),
+                        status: proc.get_exit_status(),
+                    });
+                } catch (e) {
+                    resolve({ ok: false, output: `${e}`, status: 1 });
+                }
+            });
+        } catch (error) {
+            resolve({ ok: false, output: `${error}`, status: 1 });
+        }
+    });
+}
+
+function getTerminalCommand(cmdString) {
+    let terms = ['cosmic-term', 'gnome-terminal', 'ptyxis', 'x-terminal-emulator'];
+    for (let term of terms) {
+        if (GLib.find_program_in_path(term)) {
+            if (term === 'gnome-terminal') {
+                return ['gnome-terminal', '--', 'bash', '-lc', `${cmdString}; echo; read -n 1 -s -r -p 'Press any key to close...'`];
+            }
+            return [term, '-e', 'bash', '-lc', `${cmdString}; echo; read -n 1 -s -r -p 'Press any key to close...'`];
+        }
     }
+    return ['x-terminal-emulator', '-e', 'bash', '-lc', `${cmdString}; read -n 1`];
 }
 
 const WarpPanelButton = GObject.registerClass(
@@ -53,13 +61,18 @@ class WarpPanelButton extends PanelMenu.Button {
 
         this._expanded = false;
         this._updatingToggle = false;
+        this._advancedItems = [];
 
-        this.add_child(new St.Label({
+        // Top bar label
+        this.label = new St.Label({
             text: 'WARP',
             y_expand: true,
             y_align: Clutter.ActorAlign.CENTER,
-        }));
+            style_class: 'warp-panel-label',
+        });
+        this.add_child(this.label);
 
+        // Menu items
         this._statusItem = new PopupMenu.PopupMenuItem('Status: checking...', {
             reactive: false,
             can_focus: false,
@@ -71,34 +84,36 @@ class WarpPanelButton extends PanelMenu.Button {
             if (this._updatingToggle)
                 return;
 
-            if (!this._isWarpInstalled()) {
-                this._withToggleUpdate(() => this._toggleItem.setToggleState(false));
-                this._notifyMissingWarp();
-                return;
-            }
-
-            this._runWarpCommand(state ? 'connect --accept-tos' : 'disconnect');
-            this._refreshStatus();
+            this._checkInstalled().then(installed => {
+                if (!installed) {
+                    this._withToggleUpdate(() => this._toggleItem.setToggleState(false));
+                    this._notify('Cloudflare WARP', 'warp-cli not found. Open Settings for one-click install.');
+                    return;
+                }
+                this._runWarpCommand(state ? ['connect', '--accept-tos'] : ['disconnect']);
+            });
         });
         this.menu.addMenuItem(this._toggleItem);
 
-        this._settingsItem = new PopupMenu.PopupMenuItem('Settings');
+        this._settingsItem = new PopupMenu.PopupMenuItem('Settings & Modes');
         this._settingsSignalId = this._settingsItem.connect('activate', () => {
             this._expanded = !this._expanded;
             this._buildAdvancedSection();
         });
         this.menu.addMenuItem(this._settingsItem);
 
-        this._advancedItems = [];
-
         this._refreshStatus();
-        this._refreshTimeoutId = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, 5, () => {
+        this._refreshTimeoutId = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, 4, () => {
             this._refreshStatus();
             return GLib.SOURCE_CONTINUE;
         });
     }
 
-    _buildAdvancedSection() {
+    async _checkInstalled() {
+        return GLib.find_program_in_path('warp-cli') !== null;
+    }
+
+    async _buildAdvancedSection() {
         this._advancedItems.forEach(item => item.destroy());
         this._advancedItems = [];
 
@@ -109,51 +124,60 @@ class WarpPanelButton extends PanelMenu.Button {
         this.menu.addMenuItem(separator);
         this._advancedItems.push(separator);
 
-        if (!this._isWarpInstalled()) {
-            let installItem = new PopupMenu.PopupMenuItem('Install Cloudflare WARP (one-click)');
-            installItem.connect('activate', () => this._runInstallCommand());
+        let isInstalled = await this._checkInstalled();
+        if (!isInstalled) {
+            let installItem = new PopupMenu.PopupMenuItem('Install Cloudflare WARP (One-Click)');
+            installItem.connect('activate', () => {
+                let termCmd = getTerminalCommand(INSTALL_COMMAND);
+                Gio.Subprocess.new(termCmd, Gio.SubprocessFlags.NONE);
+            });
             this.menu.addMenuItem(installItem);
             this._advancedItems.push(installItem);
 
-            let copyItem = new PopupMenu.PopupMenuItem('Copy install command');
+            let copyItem = new PopupMenu.PopupMenuItem('Copy Install Command');
             copyItem.connect('activate', () => {
                 St.Clipboard.get_default().set_text(St.ClipboardType.CLIPBOARD, INSTALL_COMMAND);
-                Main.notify('Cloudflare WARP', 'Install command copied to clipboard.');
+                this._notify('Cloudflare WARP', 'Install command copied to clipboard.');
             });
             this.menu.addMenuItem(copyItem);
             this._advancedItems.push(copyItem);
             return;
         }
 
-        ADVANCED_COMMANDS.forEach(command => {
-            let menuItem = new PopupMenu.PopupMenuItem(`warp-cli ${command}`);
-            menuItem.connect('activate', () => this._runWarpCommand(command));
-            this.menu.addMenuItem(menuItem);
-            this._advancedItems.push(menuItem);
+        // Mode switch buttons
+        let modes = [
+            ['warp', 'Set Mode: WARP (Full)'],
+            ['warp+doh', 'Set Mode: WARP + DoH'],
+            ['doh', 'Set Mode: 1.1.1.1 (DoH Only)'],
+            ['proxy', 'Set Mode: Proxy (SOCKS5)'],
+        ];
+
+        for (let [mode, label] of modes) {
+            let item = new PopupMenu.PopupMenuItem(label);
+            item.connect('activate', () => this._runWarpCommand(['mode', mode]));
+            this.menu.addMenuItem(item);
+            this._advancedItems.push(item);
+        }
+
+        let sep2 = new PopupMenu.PopupSeparatorMenuItem();
+        this.menu.addMenuItem(sep2);
+        this._advancedItems.push(sep2);
+
+        let termSettingsItem = new PopupMenu.PopupMenuItem('Terminal: warp-cli settings');
+        termSettingsItem.connect('activate', () => {
+            let termCmd = getTerminalCommand('warp-cli settings');
+            Gio.Subprocess.new(termCmd, Gio.SubprocessFlags.NONE);
         });
+        this.menu.addMenuItem(termSettingsItem);
+        this._advancedItems.push(termSettingsItem);
 
-        let connectItem = new PopupMenu.PopupMenuItem('warp-cli connect');
-        connectItem.connect('activate', () => this._runWarpCommand('connect --accept-tos'));
-        this.menu.addMenuItem(connectItem);
-        this._advancedItems.push(connectItem);
-
-        let disconnectItem = new PopupMenu.PopupMenuItem('warp-cli disconnect');
-        disconnectItem.connect('activate', () => this._runWarpCommand('disconnect'));
-        this.menu.addMenuItem(disconnectItem);
-        this._advancedItems.push(disconnectItem);
-    }
-
-    _notifyMissingWarp() {
-        Main.notify('Cloudflare WARP', `warp-cli was not found. Open Settings for one-click install.\n\n${INSTALL_COMMAND}`);
-    }
-
-    _runInstallCommand() {
-        Util.spawn(['gnome-terminal', '--', 'bash', '-lc', `${INSTALL_COMMAND}; echo; read -n 1 -s -r -p "Press any key to close..."`]);
-        Main.notify('Cloudflare WARP', 'Install command launched in terminal.');
-    }
-
-    _isWarpInstalled() {
-        return runShell('command -v warp-cli').ok;
+        let logsItem = new PopupMenu.PopupMenuItem('Terminal: View warp-svc logs');
+        logsItem.connect('activate', () => {
+            let termCmd = getTerminalCommand('journalctl -u warp-svc -f');
+            Gio.Subprocess.new(termCmd, Gio.SubprocessFlags.NONE);
+        });
+        this.menu.addMenuItem(logsItem);
+        this._advancedItems.push(logsItem);
     }
 
     _withToggleUpdate(action) {
@@ -165,37 +189,58 @@ class WarpPanelButton extends PanelMenu.Button {
         }
     }
 
-    _refreshStatus() {
-        if (!this._isWarpInstalled()) {
+    async _refreshStatus() {
+        let isInstalled = await this._checkInstalled();
+        if (!isInstalled) {
             this._statusItem.label.text = 'Status: warp-cli not installed';
             this._withToggleUpdate(() => this._toggleItem.setToggleState(false));
             this._settingsItem.label.text = 'Settings (install available)';
+            this.label.text = 'WARP (off)';
             return;
         }
 
-        this._settingsItem.label.text = this._expanded ? 'Settings (hide)' : 'Settings';
+        this._settingsItem.label.text = this._expanded ? 'Settings (hide)' : 'Settings & Modes';
 
-        let result = runShell('warp-cli status');
-        if (!result.ok) {
-            this._statusItem.label.text = 'Status: unavailable';
-            return;
+        let res = await runCommandAsync(['warp-cli', '--json', 'status']);
+        let connected = false;
+        let statusText = 'Unknown';
+
+        if (res.ok) {
+            try {
+                let data = JSON.parse(res.output);
+                statusText = data.status || 'Unknown';
+                connected = statusText.toLowerCase() === 'connected';
+            } catch (e) {
+                connected = res.output.toLowerCase().includes('connected');
+                statusText = connected ? 'Connected' : 'Disconnected';
+            }
+        } else {
+            let resPlain = await runCommandAsync(['warp-cli', 'status']);
+            if (resPlain.ok) {
+                statusText = resPlain.output.split('\n')[0] || 'Unknown';
+                connected = resPlain.output.toLowerCase().includes('connected');
+            } else {
+                statusText = 'Daemon Inactive';
+            }
         }
 
-        let statusText = result.output.split('\n')[0] || 'unknown';
         this._statusItem.label.text = `Status: ${statusText}`;
-
-        let lowerOutput = result.output.toLowerCase();
-        let connected = lowerOutput.includes('connected') && !lowerOutput.includes('disconnected');
         this._withToggleUpdate(() => this._toggleItem.setToggleState(connected));
+        this.label.text = connected ? '● WARP' : '○ WARP';
     }
 
-    _runWarpCommand(command) {
-        let result = runShell(`warp-cli ${command}`);
-        if (result.ok) {
-            Main.notify('Cloudflare WARP', result.output || `warp-cli ${command} executed.`);
+    async _runWarpCommand(args) {
+        let res = await runCommandAsync(['warp-cli', ...args]);
+        if (res.ok) {
+            this._notify('Cloudflare WARP', res.output || `warp-cli ${args.join(' ')} executed.`);
         } else {
-            Main.notifyError('Cloudflare WARP', result.output || `warp-cli ${command} failed.`);
+            this._notify('Cloudflare WARP', `Error: ${res.output || 'Command failed.'}`);
         }
+        this._refreshStatus();
+    }
+
+    _notify(title, message) {
+        Main.notify(title, message);
     }
 
     destroy() {
@@ -218,18 +263,16 @@ class WarpPanelButton extends PanelMenu.Button {
     }
 });
 
-let warpIndicator;
+export default class WarpCosmicExtension extends Extension {
+    enable() {
+        this._indicator = new WarpPanelButton();
+        Main.panel.addToStatusArea(this.uuid, this._indicator);
+    }
 
-function init() {}
-
-function enable() {
-    warpIndicator = new WarpPanelButton();
-    Main.panel.addToStatusArea('warp-cosmic-panel', warpIndicator);
-}
-
-function disable() {
-    if (warpIndicator) {
-        warpIndicator.destroy();
-        warpIndicator = null;
+    disable() {
+        if (this._indicator) {
+            this._indicator.destroy();
+            this._indicator = null;
+        }
     }
 }
