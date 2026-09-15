@@ -114,6 +114,17 @@ cd CloudflareWARP-COSMIC-Panel
 ./uninstall.sh
 ```
 
+## ❓ Frequently Asked Questions (FAQ)
+
+### Why doesn't the GNOME extension work on Pop!_OS 24.04?
+Pop!_OS 24.04 LTS uses the brand-new **COSMIC Desktop Environment** (`cosmic-epoch`) written in Rust, which does not run GNOME Shell extensions. This project provides a dedicated **COSMIC Panel Tray Applet** that natively integrates into COSMIC's `cosmic-applet-status-area` via the StatusNotifierItem (SNI) standard.
+
+### How do I switch DNS modes (e.g. 1.1.1.1 or DoH)?
+Right-click the panel icon, open the **Mode** submenu, and select `1.1.1.1 (DoH Only)`, `WARP with DoH`, or `WARP (Full Tunnel)`. You can also run `warp-cosmic mode doh` in your terminal.
+
+### How do I check if the WARP service is running?
+Run `warp-cosmic status` in your terminal or check `systemctl status warp-svc`. The panel icon will show a warning indicator if the daemon is inactive.
+
 ---
 
 ## 📄 License
