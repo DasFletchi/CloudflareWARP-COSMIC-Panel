@@ -101,6 +101,7 @@ class WarpCosmicTray(QSystemTrayIcon):
         self.poll_timer = QTimer(self)
         self.poll_timer.setInterval(4000)  # 4 seconds interval
         self.poll_timer.timeout.connect(self.refresh_status)
+        self.poll_timer.timeout.connect(self._verify_tray_registered)
         self.poll_timer.start()
 
         # Initial refresh
@@ -412,6 +413,11 @@ X-GNOME-Autostart-enabled=true
         cmd = self._get_terminal_cmd(install_script)
         subprocess.Popen(cmd)
 
+    def _verify_tray_registered(self):
+        """Watchdog to re-register icon if StatusNotifierWatcher restarts."""
+        if not self.isVisible() or not QSystemTrayIcon.isSystemTrayAvailable():
+            self.show()
+
     def _send_notification(self, title: str, message: str):
         """Send native desktop notification via notify-send or tray message."""
         if shutil.which("notify-send"):
@@ -429,7 +435,31 @@ X-GNOME-Autostart-enabled=true
         self.app.quit()
 
 
+def _wait_for_tray_service(timeout_seconds: float = 20.0) -> bool:
+    """Wait for StatusNotifierWatcher to be active on D-Bus during login boot."""
+    import time
+    start = time.time()
+    while time.time() - start < timeout_seconds:
+        try:
+            res = subprocess.run(
+                ["busctl", "--user", "status", "org.kde.StatusNotifierWatcher"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+                timeout=1.0,
+            )
+            if res.returncode == 0:
+                return True
+        except Exception:
+            pass
+        time.sleep(0.4)
+    return False
+
+
 def main():
+    # Wait for COSMIC status notifier watcher on boot
+    _wait_for_tray_service(timeout_seconds=25.0)
+
     # Set app metadata
     os.environ["QT_AUTO_SCREEN_SCALE_FACTOR"] = "1"
     app = QApplication(sys.argv)
@@ -445,3 +475,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
